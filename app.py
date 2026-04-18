@@ -53,33 +53,41 @@ def get_av_analysis(symbol, api_key, rate_delta, cur_rate):
         return None
 
 if scan_btn:
-    # 1. Fetch macro data FIRST so variables exist
+    # 1. Fetch macro data FIRST (prevents NameError)
     cur_rate, rate_delta = fetch_macro_data(FRED_KEY)
     
-    # 2. Proceed with scanning loop
     tickers = [t.strip().upper() for t in watchlist_input.split(",")]
     results = []
     
-    for s in tickers:
-        # Now rate_delta and cur_rate are defined!
-        res = get_av_analysis(s, AV_KEY, rate_delta, cur_rate)
-        if res:
-            results.append(res)
-
-            else:
-                st.error(f"❌ {s}: API limit hit or connection failed.")
+    with st.status("Analyzing Market Data...") as status:
+        for s in tickers:
+            # Check daily limit
+            if st.session_state.api_calls_used >= 25:
+                st.error(f"Daily limit reached. Cannot analyze {s}.")
+                break
+                
+            # 2. Call the analysis (All 4 arguments must match function definition)
+            res = get_av_analysis(s, AV_KEY, rate_delta, cur_rate)
             
-            # Critical: Wait 12s between stocks to avoid the 5-per-minute limit
+            # 3. FIX: Check indentation of this if/else block
+            if res:
+                results.append(res)
+                st.write(f"✅ {s} analyzed successfully.")
+            else:
+                st.write(f"⚠️ {s} skipped (No news or API limit).")
+            
+            # Rate limiting for Alpha Vantage Free Tier
             if len(tickers) > 1:
                 time.sleep(12) 
         
-        status.update(label="Analysis Complete!", state="complete", expanded=False)
+        status.update(label="Analysis Complete!", state="complete")
 
-    # Display the final results table
+    # 4. Display Results
     if results:
-        st.subheader("🏆 Opportunities Detected")
         df = pd.DataFrame(results).sort_values(by="Score", ascending=False)
+        st.subheader("🏆 Opportunities Detected")
         st.dataframe(df, use_container_width=True)
+
     else:
         # This tells you why the table is missing
         st.info("ℹ️ No stocks could be analyzed. Check the warnings in the sidebar/status box.")
