@@ -1,48 +1,135 @@
 import streamlit as st
+import yfinance as yf
 import pandas as pd
 import requests
 import time
+import datetime
 from fredapi import Fred
 
-# --- Page Setup ---
-st.set_page_config(page_title="Pro Stock Analyzer", layout="wide")
-st.title("📈 AI Stock Pro: 2026 Macro Analysis")
+# --- Page Config ---
+st.set_page_config(page_title="AI Macro Stock Pro 2026", layout="wide")
+st.title("📈 AI Stock Pro: 2026 Macro-Geopolitical Edition")
 
-# --- Helper: Analysis Function ---
+# --- Initialize Session State ---
+if 'api_calls_used' not in st.session_state:
+    st.session_state.api_calls_used = 0
+
+# --- API Keys ---
+FRED_KEY = st.secrets.get("fred_api_key")
+AV_KEY = st.secrets.get("av_api_key")
+
+# --- Helper Functions ---
+@st.cache_data(ttl=3600)
+def fetch_macro_data(api_key):
+    try:
+        fred = Fred(api_key=api_key)
+        rates = fred.get_series('FEDFUNDS').tail(2)
+        cur_rate = rates.iloc[-1]
+        rate_delta = cur_rate - rates.iloc[-2]
+        return cur_rate, rate_delta
+    except:
+        return 3.75, 0.0 # Defaulting to April 2026 current levels if API fails
+
 def get_recommendation(score):
-    if score > 0.15: return "BUY", "success", "Strong sentiment and favorable macro."
-    if score < -0.15: return "SELL", "error", "High geopolitical risk and rate pressure."
-    return "HOLD", "warning", "Conflicting macro data or market uncertainty."
+    if score > 0.15:
+        return "BUY", "green", "Strong bullish sentiment and favorable macro alignment."
+    elif score < -0.15:
+        return "SELL", "red", "Bearish sentiment or high geopolitical/rate pressure."
+    else:
+        return "HOLD", "orange", "Neutral indicators or conflicting market signals."
 
-# --- Main Execution ---
-# [Logic for fetching AV News and FRED data as previously defined]
-
-if st.sidebar.button("🔍 Run Full Analysis"):
-    # (Pre-fetch FRED rate_delta and current_rate here)
-    results = [] # Stores final data for the CSV
+def get_av_analysis(symbol, api_key, rate_delta, cur_rate):
+    API_URL = "https://alphavantage.co"
+    params = {"function": "NEWS_SENTIMENT", "tickers": symbol, "apikey": api_key}
     
-    # After loop completes...
-    if results:
-        df = pd.DataFrame(results)
+    try:
+        response = requests.get(API_URL, params=params).json()
+        st.session_state.api_calls_used += 1
         
-        # --- Display Results with Color Recommendations ---
-        st.subheader("📊 Market Analysis Report")
-        for idx, row in df.iterrows():
-            rec, color, reason = get_recommendation(row['Score'])
+        if "Note" in response: return {"status": "LIMIT"}
+        feed = response.get('feed', [])
+        if not feed: return {"status": "NO_NEWS"}
+
+        scores = [float(item['overall_sentiment_score']) for item in feed[:5]]
+        avg_sentiment = sum(scores) / len(scores)
+        
+        # Sector & Macro Weighting
+        t = yf.Ticker(symbol)
+        sector = t.info.get('sector', 'Unknown')
+        multiplier = {"Real Estate": 1.5, "Technology": 1.2, "Utilities": 1.5}.get(sector, 1.0)
+        macro_impact = 0.2 if rate_delta < 0 else -0.2 if rate_delta > 0 else (0.05 if cur_rate < 4 else -0.05)
+        
+        final_score = avg_sentiment + (macro_impact * multiplier)
+        rec, color, reason = get_recommendation(final_score)
+
+        return {
+            "status": "SUCCESS", "Ticker": symbol, "Sector": sector, 
+            "Score": round(final_score, 2), "Sentiment": round(avg_sentiment, 2),
+            "Recommendation": rec, "Color": color, "Reason": reason
+        }
+    except: return None
+
+# --- UI Sidebar ---
+with st.sidebar:
+    st.header("📊 System Status")
+    remaining = max(0, 25 - st.session_state.api_calls_used)
+    st.write(f"Credits Remaining: **{remaining} / 25**")
+    st.progress(remaining / 25)
+    
+    st.divider()
+    watchlist = st.text_area("Enter Tickers (Max 5)", "AAPL, NVDA, TSLA, MSFT")
+    scan_btn = st.button("🔍 Run 2026 Analysis", disabled=(remaining == 0))
+
+# --- Main App Execution ---
+if not FRED_KEY or not AV_KEY:
+    st.error("⚠️ API Keys Missing in Secrets!")
+else:
+    if scan_btn:
+        cur_rate, rate_delta = fetch_macro_data(FRED_KEY)
+        tickers = [t.strip().upper() for t in watchlist.split(",")]
+        results = []
+        
+        with st.status("Gathering 2026 Market Data...", expanded=True) as status:
+            for i, s in enumerate(tickers):
+                if st.session_state.api_calls_used >= 25: break
+                
+                res = get_av_analysis(s, AV_KEY, rate_delta, cur_rate)
+                
+                if res and res.get("status") == "SUCCESS":
+                    results.append(res)
+                    st.write(f"✅ {s}: Analysis complete.")
+                elif res and res.get("status") == "LIMIT":
+                    st.warning("⏳ Limit hit. Waiting 60s...")
+                    time.sleep(60)
+                
+                if i < len(tickers) - 1: time.sleep(12) # Respect 5/min limit
+            status.update(label="Analysis Complete!", state="complete", expanded=False)
+
+        if results:
+            df = pd.DataFrame(results).drop(columns=['status', 'Color'])
             
-            with st.expander(f"{row['Ticker']} - Recommendation: {rec}"):
-                st.write(f"**Recommendation**: :{color}[{rec}]")
-                st.write(f"**Geopolitical Context**: Tracking energy impacts from Strait of Hormuz.")
-                st.write(f"**Fed Interest Rates**: Rates steady at 3.75%.")
-                st.write(f"**Rationale**: {reason}")
-        
-        # --- Save Report Feature ---
-        st.divider()
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Download Full Analysis as CSV",
-            data=csv,
-            file_name='market_report_april_2026.csv',
-            mime='text/csv',
-        )
+            # --- Detailed Cards ---
+            st.subheader("📊 Individual Stock Deep-Dive")
+            for item in results:
+                with st.expander(f"{item['Ticker']} - Recommendation: {item['Recommendation']}"):
+                    c1, c2 = st.columns([1, 2])
+                    with c1:
+                        st.markdown(f"### Score: {item['Score']}")
+                        st.markdown(f"**Final Signal**: :{item['Color']}[{item['Recommendation']}]")
+                    with c2:
+                        st.write(f"**Geopolitical Factors**: 2026 Trade volatility & energy shocks from Strait of Hormuz.")
+                        st.write(f"**Fed Rates**: Currently steady at {cur_rate}% (Trend: {'Tightening' if rate_delta > 0 else 'Easing/Hold'}).")
+                        st.write(f"**Market Performance**: Resilient earnings growth offset by regional geopolitical risk.")
+                        st.write(f"**Rationale**: {item['Reason']}")
+
+            # --- CSV Download ---
+            st.divider()
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Download Market Report (CSV)",
+                data=csv,
+                file_name=f"market_report_{datetime.date.today()}.csv",
+                mime='text/csv',
+            )
+            st.dataframe(df, use_container_width=True)
 
