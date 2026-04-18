@@ -31,13 +31,22 @@ def fetch_macro_data(api_key):
         return 0.0, 0.0
 
 def get_av_analysis(symbol, api_key, rate_delta, cur_rate):
-    """Calls Alpha Vantage and calculates score with detailed error tracking."""
-    url = f"https://alphavantage.co{symbol}&apikey={api_key}"
+    """Calls Alpha Vantage and calculates score using a safe parameter dictionary."""
+    # The base URL should NOT have any parameters attached to it
+    API_URL = "https://www.alphavantage.co/query"
+    
+    # Passing parameters as a dictionary is the safest way to avoid URL typos
+    params = {
+        "function": "NEWS_SENTIMENT",
+        "tickers": symbol,
+        "apikey": api_key
+    }
+    
     try:
-        response = requests.get(url).json()
+        # requests.get will automatically format the URL correctly with '?' and '&'
+        response = requests.get(API_URL, params=params).json()
         st.session_state.api_calls_used += 1
         
-        # Check for specific API feedback
         if "Note" in response:
             return {"status": "RATE_LIMIT", "msg": "5-calls-per-minute limit hit."}
         if "Error Message" in response:
@@ -47,16 +56,14 @@ def get_av_analysis(symbol, api_key, rate_delta, cur_rate):
         if not feed:
             return {"status": "NO_NEWS", "msg": "No news found for this ticker in last 48h."}
 
-        # Calculate Sentiment
+        # Sentiment Calculation
         scores = [float(item['overall_sentiment_score']) for item in feed[:5]]
         avg_sentiment = sum(scores) / len(scores)
         
-        # Sector Weighting
+        # Sector/Macro Weighting
         t = yf.Ticker(symbol)
         sector = t.info.get('sector', 'Unknown')
         multiplier = {"Real Estate": 1.5, "Technology": 1.2, "Utilities": 1.5}.get(sector, 1.0)
-        
-        # Macro weighting
         macro_impact = 0.2 if rate_delta < 0 else -0.2 if rate_delta > 0 else (0.05 if cur_rate < 4 else -0.05)
         
         final_score = avg_sentiment + (macro_impact * multiplier)
@@ -69,6 +76,7 @@ def get_av_analysis(symbol, api_key, rate_delta, cur_rate):
         }
     except Exception as e:
         return {"status": "ERROR", "msg": str(e)}
+
 
 # --- Sidebar UI ---
 with st.sidebar:
