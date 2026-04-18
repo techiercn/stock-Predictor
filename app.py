@@ -35,7 +35,7 @@ with st.sidebar:
 AV_KEY = st.secrets.get("av_api_key")
 FRED_KEY = st.secrets.get("fred_api_key")
 
-def get_av_analysis(symbol, api_key):
+def get_av_analysis(symbol, api_key, rate_delta, cur_rate):
     # This counts as 1 request
     url = f"https://alphavantage.co{symbol}&apikey={api_key}"
     try:
