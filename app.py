@@ -5,11 +5,11 @@ import requests
 from fredapi import Fred
 from vaderSentiment.vaderSentiment import SentimentIntensityAnalyzer
 
-# --- Page Configuration ---
+# --- Page Config ---
 st.set_page_config(page_title="Macro Pro: Top Picks", layout="wide")
 st.title("🚀 AI Stock Pro: Top Market Picks")
 
-# --- API Keys from Streamlit Secrets ---
+# --- API Keys ---
 FRED_KEY = st.secrets.get("fred_api_key")
 NEWSDATA_KEY = st.secrets.get("newsdata_api_key")
 
@@ -33,11 +33,12 @@ def get_stock_analysis(symbol, api_key, rate_delta, cur_rate):
         t = yf.Ticker(symbol)
         sector = t.info.get('sector', 'Unknown')
         
-        # Sentiment via NewsData.io
+        # Sentiment Analysis via NewsData.io
         analyzer = SentimentIntensityAnalyzer()
+        # Query format: https://newsdata.io/api/1/latest?apikey=YOUR_API_KEY&q=TOPIC
         url = f"https://newsdata.io{api_key}&q={symbol}&language=en"
         r = requests.get(url).json()
-        articles = r.get('results', [])[:5]
+        articles = r.get('results', [])[:5] 
         
         sentiment = sum([analyzer.polarity_scores(a['title'])['compound'] for a in articles])/len(articles) if articles else 0
         
@@ -58,7 +59,7 @@ scan_btn = st.sidebar.button("🔍 Run Full Scan")
 
 # --- Main App Execution ---
 if not FRED_KEY or not NEWSDATA_KEY:
-    st.error("Missing API Keys! Ensure 'fred_api_key' and 'newsdata_api_key' are in Secrets.")
+    st.error("Missing API Keys! Add 'fred_api_key' and 'newsdata_api_key' to your Secrets.")
 else:
     cur_rate, rate_delta = fetch_macro_data(FRED_KEY)
 
@@ -84,10 +85,10 @@ else:
                         st.metric(label=row['Ticker'], value=f"Score: {row['Score']}", delta=f"Sent: {row['Sentiment']}")
                         st.caption(f"Sector: {row['Sector']}")
             else:
-                st.info(f"No strong signals at the {threshold} threshold.")
+                st.info(f"No stocks meet the {threshold} threshold.")
 
             st.divider()
-            st.write("### Complete Analysis Rankings")
+            st.write("### Complete Rankings")
             st.dataframe(df, use_container_width=True)
         else:
             st.error("Scan failed. Verify your NewsData.io key and internet connection.")
