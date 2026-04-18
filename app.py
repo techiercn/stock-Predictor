@@ -65,14 +65,21 @@ if run_btn:
         except: st.info("Could not fetch FRED data.")
 
     # 3. Sentiment & Recommendation
-    sentiment_score = analyze_sentiment(ticker_input, NEWS_KEY)
-    multiplier = SECTOR_SENSITIVITY.get(sector, 1.0)
-    macro_impact = -0.5 if rate_change > 0 else 0.5 if rate_change < 0 else 0
-    final_score = sentiment_score + (macro_impact * multiplier)
+    BUY_THRESHOLD = 0.10  # Lowered from 0.3
+SELL_THRESHOLD = -0.10 # Lowered from -0.3
 
-    st.divider()
-    st.subheader("Final AI Recommendation")
-    if final_score > 0.3: st.success(f"🔥 BUY ({ticker_input})")
-    elif final_score < -0.3: st.error(f"🚨 SELL ({ticker_input})")
-    else: st.warning(f"⚖️ HOLD ({ticker_input})")
+# Calculate a more sensitive macro impact
+# Even if rates are steady (0), we can check if they are high or low historically
+macro_impact = -0.2 if rate_change > 0 else 0.2 if rate_change < 0 else 0.05 if rates.iloc[-1] < 4.0 else -0.05
 
+final_score = sentiment_score + (macro_impact * multiplier)
+
+st.divider()
+st.subheader("Final AI Recommendation")
+
+if final_score >= BUY_THRESHOLD:
+    st.success(f"🔥 Recommendation: BUY ({ticker_input})")
+elif final_score <= SELL_THRESHOLD:
+    st.error(f"🚨 Recommendation: SELL ({ticker_input})")
+else:
+    st.warning(f"⚖️ Recommendation: HOLD ({ticker_input})")
