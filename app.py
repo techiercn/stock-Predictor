@@ -21,6 +21,7 @@ NEWS_API_KEY = st.secrets.get("news_api_key")
 
 # --- Logic Functions ---
 def get_news_sentiment(ticker, api_key, start_date, end_date):
+    """Fetches news with date filtering and status checks."""
     base_url = "https://newsapi.org"
     params = {
         "q": ticker,
@@ -34,15 +35,31 @@ def get_news_sentiment(ticker, api_key, start_date, end_date):
     try:
         response = requests.get(base_url, params=params, timeout=10)
         
-        # ADD THIS: Check if the response is successful (200 OK)
+        # Check if NewsAPI returned an error (like 429 for rate limits or 403 for Cloud)
         if response.status_code != 200:
-            st.sidebar.error(f"⚠️ {ticker} Error {response.status_code}: {response.reason}")
-            # If 403, it's likely a plan restriction; if 429, you're rate-limited.
+            st.sidebar.error(f"⚠️ {ticker} API Error {response.status_code}: {response.reason}")
             return 0.0
 
         data = response.json()
-        # ... (rest of your existing logic)
-
+        if data.get("status") == "ok" and data.get("totalResults", 0) > 0:
+            articles = data["articles"][:10]
+            scores = []
+            for art in articles:
+                title = art.get('title', 'No Title')
+                text = f"{title} {art.get('description', '')}"
+                sentiment_score = TextBlob(text).sentiment.polarity
+                scores.append(sentiment_score)
+                
+                st.session_state.analysis_logs.append({
+                    "Ticker": ticker,
+                    "Title": title[:60],
+                    "Score": round(sentiment_score, 2)
+                })
+            return sum(scores) / len(scores) if scores else 0.0
+        return 0.0
+    except Exception as e:
+        st.sidebar.error(f"⚠️ {ticker} System Error: {str(e)}")
+        return 0.0
 
 def get_recommendation(score):
     if score > 0.10: return "BUY", "green", "Bullish sentiment relative to 2026 baseline."
@@ -54,8 +71,7 @@ with st.sidebar:
     st.header("📊 Control Center")
     watchlist = st.text_area("Enter Tickers", "AAPL, NVDA, TSLA, SCHD")
     
-    # Date Range Selector
-    # Note: NewsAPI free tier limits to last 30 days
+    # NewsAPI free tier limits to last 30 days
     today = datetime.date.today()
     thirty_days_ago = today - datetime.timedelta(days=30)
     
@@ -80,8 +96,7 @@ if not NEWS_API_KEY:
     st.warning("⚠️ NewsAPI Key missing! Add 'news_api_key' to your Secrets.")
     st.stop()
 
-# Actual April 2026 Macro Data
-# Effective Fed Funds Rate is currently holding steady at ~3.64%
+# April 2026 Macro Context
 cur_rate = 3.64 
 
 if scan_btn and len(date_range) == 2:
@@ -90,9 +105,10 @@ if scan_btn and len(date_range) == 2:
     tickers = [t.strip().upper() for t in watchlist.split(",")]
     temp_results = []
     
-    with st.status(f"Scanning 2026 news ({start_dt} to {end_dt})...") as status:
+    with st.status(f"Scanning news from {start_dt} to {end_dt}...") as status:
         for s in tickers:
             sentiment = get_news_sentiment(s, NEWS_API_KEY, start_dt, end_dt)
+            # Final Score includes Fed Rate buffer
             final_score = sentiment + (0.05 if cur_rate < 4.0 else -0.05)
             rec, color, reason = get_recommendation(final_score)
             
@@ -121,7 +137,7 @@ if st.session_state.results_data:
         with st.expander(f"{item['Ticker']} — {item['Recommendation']}"):
             st.metric("Sentiment Score", f"{item['Score']} / 1.0", delta=item['Sentiment'])
             st.write(f"**Rationale**: {item['Reason']}")
-            st.caption(f"Macro Buffer: +0.05 (Fed Rate {cur_rate}% < 4.0% threshold)")
+            st.caption(f"Macro Buffer Applied: News Sentiment adjusted for Fed Funds Rate ({cur_rate}%)")
 
     st.divider()
     st.dataframe(df.drop(columns=['Color']), use_container_width=True)
