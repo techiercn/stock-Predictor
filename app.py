@@ -14,28 +14,32 @@ FRED_KEY = st.secrets.get("fred_api_key")
 NEWS_KEY = st.secrets.get("news_api_key")
 
 # --- CACHED DATA FETCHING ---
-# ttl=3600 means it will only re-fetch macro data once per hour
 @st.cache_data(ttl=3600)
 def fetch_macro_data(api_key):
     if not api_key: return 0.0, 0.0
-    fred = Fred(api_key=api_key)
-    rates = fred.get_series('FEDFUNDS').tail(2)
-    cur_rate = rates.iloc[-1]
-    rate_delta = cur_rate - rates.iloc[-2]
-    return cur_rate, rate_delta
+    try:
+        fred = Fred(api_key=api_key)
+        rates = fred.get_series('FEDFUNDS').tail(2)
+        cur_rate = rates.iloc[-1]
+        rate_delta = cur_rate - rates.iloc[-2]
+        return cur_rate, rate_delta
+    except Exception as e:
+        st.error(f"Macro Error: {e}")
+        return 0.0, 0.0
 
-# ttl=1800 means it will only re-fetch stock news/prices once every 30 mins
 @st.cache_data(ttl=1800)
 def get_stock_analysis(symbol, news_key, rate_delta, cur_rate):
     try:
         t = yf.Ticker(symbol)
-        sector = t.info.get('sector', 'Unknown')
+        info = t.info
+        sector = info.get('sector', 'Unknown')
         
         # Sentiment Analysis
         analyzer = SentimentIntensityAnalyzer()
         url = f"https://newsapi.org{symbol}+(stock+OR+fed)&apiKey={news_key}"
         r = requests.get(url).json()
         articles = r.get('articles', [])[:5]
+        
         sentiment = sum([analyzer.polarity_scores(a['title'])['compound'] for a in articles])/len(articles) if articles else 0
         
         # Weights
@@ -44,7 +48,8 @@ def get_stock_analysis(symbol, news_key, rate_delta, cur_rate):
         
         final_score = sentiment + (macro_impact * multiplier)
         return {"Ticker": symbol, "Sector": sector, "Score": round(final_score, 2), "Sentiment": round(sentiment, 2)}
-    except:
+    except Exception as e:
+        # Silently fail for the table, but logged if needed
         return None
 
 # --- UI Sidebar ---
@@ -55,9 +60,8 @@ scan_btn = st.sidebar.button("🔍 Run Cached Scan")
 
 # --- Main App Execution ---
 if not FRED_KEY or not NEWS_KEY:
-    st.error("Missing API Keys! Add 'fred_api_key' and 'news_api_key' to Streamlit Secrets.")
+    st.error("Missing API Keys in Secrets! Ensure 'fred_api_key' and 'news_api_key' are defined.")
 else:
-    # 1. Fetch macro data (Cached)
     cur_rate, rate_delta = fetch_macro_data(FRED_KEY)
 
     if scan_btn:
@@ -65,27 +69,29 @@ else:
         results = []
         progress = st.progress(0)
 
-        # 2. Loop through tickers using cached analysis
         for i, s in enumerate(tickers):
             res = get_stock_analysis(s, NEWS_KEY, rate_delta, cur_rate)
             if res: results.append(res)
             progress.progress((i + 1) / len(tickers))
 
-        # 3. Display Top Picks
-        df = pd.DataFrame(results).sort_values(by="Score", ascending=False)
-        top_buys = df[df['Score'] >= threshold]
+        # --- SAFETY CHECK FOR EMPTY DATA ---
+        if results:
+            df = pd.DataFrame(results).sort_values(by="Score", ascending=False)
+            top_buys = df[df['Score'] >= threshold]
 
-        st.subheader("🏆 Current Top Opportunities")
-        if not top_buys.empty:
-            cols = st.columns(min(len(top_buys), 4))
-            for idx, (_, row) in enumerate(top_buys.head(4).iterrows()):
-                with cols[idx]:
-                    st.metric(label=row['Ticker'], value=f"Score: {row['Score']}", delta=f"Sent: {row['Sentiment']}")
-                    st.caption(f"Sector: {row['Sector']}")
+            st.subheader("🏆 Current Top Opportunities")
+            if not top_buys.empty:
+                cols = st.columns(min(len(top_buys), 4))
+                for idx, (_, row) in enumerate(top_buys.head(4).iterrows()):
+                    with cols[idx]:
+                        st.metric(label=row['Ticker'], value=f"Score: {row['Score']}", delta=f"Sent: {row['Sentiment']}")
+                        st.caption(f"Sector: {row['Sector']}")
+            else:
+                st.info(f"No stocks currently meet the threshold of {threshold}.")
+
+            st.divider()
+            st.write("### Full Rankings")
+            st.dataframe(df, use_container_width=True)
         else:
-            st.info("No stocks currently meet your Buy Threshold.")
-
-        st.divider()
-        st.write("### Full Rankings")
-        st.dataframe(df, use_container_width=True)
+            st.error("Could not retrieve data for any tickers. Check your NewsAPI key or internet connection.")
 
