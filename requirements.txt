@@ -7,4 +7,9 @@ requests
 pandas
 requests
 plotly
+pandas
+requests
+plotly
+textblob
+streamlit
 
