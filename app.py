@@ -20,21 +20,21 @@ if 'analysis_logs' not in st.session_state:
 NEWS_API_KEY = st.secrets.get("news_api_key")
 
 # --- Logic Functions ---
-def get_news_sentiment(ticker, api_key):
-    """Fetches news using a params dictionary to prevent URL formatting errors."""
-    # This is the stable base URL
-    base_url = "https://newsapi.org/v2/everything"
+def get_news_sentiment(ticker, api_key, start_date, end_date):
+    """Fetches news with date filtering and safe param building."""
+    base_url = "https://newsapi.org"
     
-    # Let the requests library handle the formatting
+    # ISO 8601 formatting for NewsAPI
     params = {
         "q": ticker,
+        "from": start_date.strftime('%Y-%m-%d'),
+        "to": end_date.strftime('%Y-%m-%d'),
         "language": "en",
         "sortBy": "relevancy",
         "apiKey": api_key
     }
     
     try:
-        # requests.get combines the URL and params perfectly
         response = requests.get(base_url, params=params, timeout=10)
         data = response.json()
         
@@ -42,62 +42,71 @@ def get_news_sentiment(ticker, api_key):
             articles = data["articles"][:10]
             scores = []
             for art in articles:
-                text = f"{art.get('title', '')} {art.get('description', '')}"
+                title = art.get('title', 'No Title')
+                text = f"{title} {art.get('description', '')}"
                 sentiment_score = TextBlob(text).sentiment.polarity
                 scores.append(sentiment_score)
                 
-                # Log entry for the sidebar
                 st.session_state.analysis_logs.append({
                     "Ticker": ticker,
-                    "Title": art.get('title', 'No Title')[:60],
+                    "Title": title[:60],
                     "Score": round(sentiment_score, 2)
                 })
             return sum(scores) / len(scores) if scores else 0.0
         return 0.0
     except Exception as e:
-        # Use a sidebar error so it doesn't break the main dashboard
-        st.sidebar.error(f"⚠️ {ticker} URL Error: {str(e)}")
+        st.sidebar.error(f"⚠️ {ticker} Error: {str(e)}")
         return 0.0
 
-
 def get_recommendation(score):
-    if score > 0.10: return "BUY", "green", "Positive sentiment + macro tailwinds."
-    if score < -0.10: return "SELL", "red", "Negative news cycle or macro pressure."
-    return "HOLD", "orange", "Mixed signals in news and macro data."
+    if score > 0.10: return "BUY", "green", "Bullish sentiment relative to 2026 baseline."
+    if score < -0.10: return "SELL", "red", "Bearish cycle or high interest rate pressure."
+    return "HOLD", "orange", "Mixed sentiment or neutral macro data."
 
 # --- Sidebar ---
 with st.sidebar:
     st.header("📊 Control Center")
     watchlist = st.text_area("Enter Tickers", "AAPL, NVDA, TSLA, SCHD")
+    
+    # Date Range Selector
+    # Note: NewsAPI free tier limits to last 30 days
+    today = datetime.date.today()
+    thirty_days_ago = today - datetime.timedelta(days=30)
+    
+    st.subheader("📅 Analysis Window")
+    date_range = st.date_input(
+        "Select Range",
+        value=(today - datetime.timedelta(days=7), today),
+        min_value=thirty_days_ago,
+        max_value=today
+    )
+    
     scan_btn = st.button("🔍 Run Full Analysis")
     
     st.divider()
-    st.subheader("📝 Live Analysis Log")
-    with st.expander("View Article Sentiment Scores"):
+    st.subheader("📝 Live Sentiment Log")
+    with st.expander("View Article Scores"):
         if st.session_state.analysis_logs:
-            log_df = pd.DataFrame(st.session_state.analysis_logs)
-            st.dataframe(log_df, use_container_width=True, hide_index=True)
-        else:
-            st.write("No data processed yet.")
+            st.dataframe(pd.DataFrame(st.session_state.analysis_logs), hide_index=True)
 
 # --- Main App Execution ---
 if not NEWS_API_KEY:
     st.warning("⚠️ NewsAPI Key missing! Add 'news_api_key' to your Secrets.")
     st.stop()
 
-# 2026 Macro Context
+# Actual April 2026 Macro Data
+# Effective Fed Funds Rate is currently holding steady at ~3.64%
 cur_rate = 3.64 
 
-if scan_btn:
-    st.session_state.analysis_logs = [] # Clear old logs
+if scan_btn and len(date_range) == 2:
+    st.session_state.analysis_logs = [] 
+    start_dt, end_dt = date_range
     tickers = [t.strip().upper() for t in watchlist.split(",")]
     temp_results = []
     
-    with st.status("Analyzing 2026 Global Intelligence...") as status:
+    with st.status(f"Scanning 2026 news ({start_dt} to {end_dt})...") as status:
         for s in tickers:
-            sentiment = get_news_sentiment(s, NEWS_API_KEY)
-            
-            # Weighted Score calculation
+            sentiment = get_news_sentiment(s, NEWS_API_KEY, start_dt, end_dt)
             final_score = sentiment + (0.05 if cur_rate < 4.0 else -0.05)
             rec, color, reason = get_recommendation(final_score)
             
@@ -106,28 +115,27 @@ if scan_btn:
                 "Sentiment": round(sentiment, 2), "Recommendation": rec, 
                 "Color": color, "Reason": reason
             })
-            st.write(f"✅ {s}: Sentiment processed.")
             time.sleep(0.2)
         status.update(label="Analysis Complete!", state="complete")
     st.session_state.results_data = temp_results
 
-# --- Visuals & Reports ---
+# --- Visuals ---
 if st.session_state.results_data:
     df = pd.DataFrame(st.session_state.results_data)
     
-    st.subheader("📊 Sentiment vs Baseline")
+    st.subheader("📊 Weighted Score Analysis")
     fig = px.bar(df, x='Ticker', y='Score', color='Recommendation',
                  color_discrete_map={'BUY': '#2ecc71', 'HOLD': '#f1c40f', 'SELL': '#e74c3c'})
-    fig.add_hline(y=0.10, line_dash="dot", line_color="green", annotation_text="Bullish")
-    fig.add_hline(y=-0.10, line_dash="dot", line_color="red", annotation_text="Bearish")
+    fig.add_hline(y=0.10, line_dash="dot", line_color="green")
+    fig.add_hline(y=-0.10, line_dash="dot", line_color="red")
     st.plotly_chart(fig, use_container_width=True)
 
     st.subheader("🔍 Deep-Dive Reports")
-    cols = st.columns(len(st.session_state.results_data))
-    for i, item in enumerate(st.session_state.results_data):
-        with cols[i]:
-            st.metric(item['Ticker'], item['Recommendation'], delta=item['Score'])
-            st.caption(item['Reason'])
+    for item in st.session_state.results_data:
+        with st.expander(f"{item['Ticker']} — {item['Recommendation']}"):
+            st.metric("Sentiment Score", f"{item['Score']} / 1.0", delta=item['Sentiment'])
+            st.write(f"**Rationale**: {item['Reason']}")
+            st.caption(f"Macro Buffer: +0.05 (Fed Rate {cur_rate}% < 4.0% threshold)")
 
     st.divider()
     st.dataframe(df.drop(columns=['Color']), use_container_width=True)
