@@ -4,4 +4,7 @@ pandas
 fredapi
 vaderSentiment
 requests
+pandas
+requests
+plotly
 
