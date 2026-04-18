@@ -56,25 +56,36 @@ if scan_btn:
     tickers = [t.strip().upper() for t in watchlist_input.split(",")]
     results = []
     
-    # Progress status container
-    with st.status("Analyzing Market Data...") as status:
+    # Use a status container to show live progress
+    with st.status("🔍 Analyzing Market Data...", expanded=True) as status:
         for s in tickers:
-            if st.session_state.api_calls_used >= daily_limit:
-                st.error("Limit exceeded during scan.")
+            if st.session_state.api_calls_used >= 25:
+                st.error(f"🛑 Daily Limit Reached (25/25). Cannot analyze {s}.")
                 break
                 
-            st.write(f"Fetching data for {s}...")
-            res = get_av_analysis(s, AV_KEY)
-            if res: results.append(res)
+            st.write(f"Fetching {s} news sentiment...")
+            res = get_av_analysis(s, AV_KEY, rate_delta, cur_rate)
             
-            # To respect '5 calls per minute' (1 call every 12 seconds)
+            if res:
+                if res.get("Details") == "No news found":
+                    st.warning(f"⚠️ {s}: No recent news found on Alpha Vantage.")
+                else:
+                    results.append(res)
+            else:
+                st.error(f"❌ {s}: API limit hit or connection failed.")
+            
+            # Critical: Wait 12s between stocks to avoid the 5-per-minute limit
             if len(tickers) > 1:
                 time.sleep(12) 
         
-        status.update(label="Analysis Complete!", state="complete")
+        status.update(label="Analysis Complete!", state="complete", expanded=False)
 
+    # Display the final results table
     if results:
-        df = pd.DataFrame(results).sort_values(by="Score", ascending=False)
         st.subheader("🏆 Opportunities Detected")
+        df = pd.DataFrame(results).sort_values(by="Score", ascending=False)
         st.dataframe(df, use_container_width=True)
+    else:
+        # This tells you why the table is missing
+        st.info("ℹ️ No stocks could be analyzed. Check the warnings in the sidebar/status box.")
 
