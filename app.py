@@ -12,7 +12,7 @@ st.title("📈 AI Stock Pro: 2026 Market Analysis")
 
 # --- Initialize Session State ---
 if 'results_data' not in st.session_state:
-    st.session_state.results_data = None
+    st.session_state.results_data = {} # Using dict for easy ticker updates
 if 'analysis_logs' not in st.session_state:
     st.session_state.analysis_logs = []
 
@@ -21,7 +21,7 @@ NEWS_API_KEY = st.secrets.get("news_api_key")
 
 # --- Logic Functions ---
 def get_news_sentiment(ticker, api_key, start_date, end_date):
-    """Fetches news with date filtering and status checks."""
+    """Fetches news and checks for common 403/429 errors."""
     base_url = "https://newsapi.org"
     params = {
         "q": ticker,
@@ -35,110 +35,96 @@ def get_news_sentiment(ticker, api_key, start_date, end_date):
     try:
         response = requests.get(base_url, params=params, timeout=10)
         
-        # Check if NewsAPI returned an error (like 429 for rate limits or 403 for Cloud)
+        # Handle NewsAPI specific errors (403 = Cloud/Auth, 429 = Rate Limit)
         if response.status_code != 200:
-            st.sidebar.error(f"⚠️ {ticker} API Error {response.status_code}: {response.reason}")
-            return 0.0
+            return None, f"Error {response.status_code}: {response.reason}"
 
         data = response.json()
-        if data.get("status") == "ok" and data.get("totalResults", 0) > 0:
-            articles = data["articles"][:10]
-            scores = []
-            for art in articles:
-                title = art.get('title', 'No Title')
-                text = f"{title} {art.get('description', '')}"
-                sentiment_score = TextBlob(text).sentiment.polarity
-                scores.append(sentiment_score)
-                
-                st.session_state.analysis_logs.append({
-                    "Ticker": ticker,
-                    "Title": title[:60],
-                    "Score": round(sentiment_score, 2)
-                })
-            return sum(scores) / len(scores) if scores else 0.0
-        return 0.0
+        articles = data.get("articles", [])
+        if not articles:
+            return 0.0, "No news found for this period."
+            
+        scores = []
+        for art in articles[:10]:
+            text = f"{art.get('title', '')} {art.get('description', '')}"
+            sentiment_score = TextBlob(text).sentiment.polarity
+            scores.append(sentiment_score)
+            
+            st.session_state.analysis_logs.append({
+                "Ticker": ticker,
+                "Title": art.get('title', 'No Title')[:60],
+                "Score": round(sentiment_score, 2)
+            })
+        avg_sentiment = sum(scores) / len(scores)
+        return avg_sentiment, "Success"
+        
     except Exception as e:
-        st.sidebar.error(f"⚠️ {ticker} System Error: {str(e)}")
-        return 0.0
+        return None, str(e)
 
-def get_recommendation(score):
-    if score > 0.10: return "BUY", "green", "Bullish sentiment relative to 2026 baseline."
-    if score < -0.10: return "SELL", "red", "Bearish cycle or high interest rate pressure."
-    return "HOLD", "orange", "Mixed sentiment or neutral macro data."
+def analyze_ticker(ticker, start_dt, end_dt):
+    """Main processing loop for a single ticker."""
+    # Current Effective Fed Funds Rate as of April 2026 is ~3.64%
+    cur_rate = 3.64 
+    sentiment, status = get_news_sentiment(ticker, NEWS_API_KEY, start_dt, end_dt)
+    
+    if sentiment is not None:
+        final_score = sentiment + (0.05 if cur_rate < 4.0 else -0.05)
+        if final_score > 0.10: rec, color = "BUY", "green"
+        elif final_score < -0.10: rec, color = "SELL", "red"
+        else: rec, color = "HOLD", "orange"
+        
+        st.session_state.results_data[ticker] = {
+            "Score": round(final_score, 2), "Sentiment": round(sentiment, 2),
+            "Recommendation": rec, "Color": color, "Status": status
+        }
+    else:
+        st.session_state.results_data[ticker] = {"Status": status}
 
 # --- Sidebar ---
 with st.sidebar:
     st.header("📊 Control Center")
-    watchlist = st.text_area("Enter Tickers", "AAPL, NVDA, TSLA, SCHD")
+    watchlist_input = st.text_area("Enter Tickers", "AAPL, NVDA, TSLA, SCHD")
     
-    # NewsAPI free tier limits to last 30 days
+    # NewsAPI 30-day limit
     today = datetime.date.today()
-    thirty_days_ago = today - datetime.timedelta(days=30)
+    date_range = st.date_input("Analysis Window", value=(today - datetime.timedelta(days=7), today),
+                               min_value=today - datetime.timedelta(days=30), max_value=today)
     
-    st.subheader("📅 Analysis Window")
-    date_range = st.date_input(
-        "Select Range",
-        value=(today - datetime.timedelta(days=7), today),
-        min_value=thirty_days_ago,
-        max_value=today
-    )
-    
-    scan_btn = st.button("🔍 Run Full Analysis")
-    
-    st.divider()
-    st.subheader("📝 Live Sentiment Log")
-    with st.expander("View Article Scores"):
-        if st.session_state.analysis_logs:
-            st.dataframe(pd.DataFrame(st.session_state.analysis_logs), hide_index=True)
+    if st.button("🔍 Run Full Analysis"):
+        st.session_state.results_data = {}
+        st.session_state.analysis_logs = []
+        tickers = [t.strip().upper() for t in watchlist_input.split(",")]
+        for t in tickers:
+            analyze_ticker(t, date_range[0], date_range[1])
 
 # --- Main App Execution ---
-if not NEWS_API_KEY:
-    st.warning("⚠️ NewsAPI Key missing! Add 'news_api_key' to your Secrets.")
-    st.stop()
-
-# April 2026 Macro Context
-cur_rate = 3.64 
-
-if scan_btn and len(date_range) == 2:
-    st.session_state.analysis_logs = [] 
-    start_dt, end_dt = date_range
-    tickers = [t.strip().upper() for t in watchlist.split(",")]
-    temp_results = []
-    
-    with st.status(f"Scanning news from {start_dt} to {end_dt}...") as status:
-        for s in tickers:
-            sentiment = get_news_sentiment(s, NEWS_API_KEY, start_dt, end_dt)
-            # Final Score includes Fed Rate buffer
-            final_score = sentiment + (0.05 if cur_rate < 4.0 else -0.05)
-            rec, color, reason = get_recommendation(final_score)
-            
-            temp_results.append({
-                "Ticker": s, "Score": round(final_score, 2), 
-                "Sentiment": round(sentiment, 2), "Recommendation": rec, 
-                "Color": color, "Reason": reason
-            })
-            time.sleep(0.2)
-        status.update(label="Analysis Complete!", state="complete")
-    st.session_state.results_data = temp_results
-
-# --- Visuals ---
 if st.session_state.results_data:
-    df = pd.DataFrame(st.session_state.results_data)
+    df = pd.DataFrame.from_dict(st.session_state.results_data, orient='index').reset_index()
+    df.rename(columns={'index': 'Ticker'}, inplace=True)
     
-    st.subheader("📊 Weighted Score Analysis")
-    fig = px.bar(df, x='Ticker', y='Score', color='Recommendation',
-                 color_discrete_map={'BUY': '#2ecc71', 'HOLD': '#f1c40f', 'SELL': '#e74c3c'})
-    fig.add_hline(y=0.10, line_dash="dot", line_color="green")
-    fig.add_hline(y=-0.10, line_dash="dot", line_color="red")
-    st.plotly_chart(fig, use_container_width=True)
+    # Charting
+    valid_df = df[df['Status'] == "Success"]
+    if not valid_df.empty:
+        fig = px.bar(valid_df, x='Ticker', y='Score', color='Recommendation',
+                     color_discrete_map={'BUY': '#2ecc71', 'HOLD': '#f1c40f', 'SELL': '#e74c3c'})
+        st.plotly_chart(fig, use_container_width=True)
 
-    st.subheader("🔍 Deep-Dive Reports")
-    for item in st.session_state.results_data:
-        with st.expander(f"{item['Ticker']} — {item['Recommendation']}"):
-            st.metric("Sentiment Score", f"{item['Score']} / 1.0", delta=item['Sentiment'])
-            st.write(f"**Rationale**: {item['Reason']}")
-            st.caption(f"Macro Buffer Applied: News Sentiment adjusted for Fed Funds Rate ({cur_rate}%)")
+    # Individual Ticker Cards with "Try Again"
+    st.subheader("🔍 Stock Analysis Cards")
+    for ticker, info in st.session_state.results_data.items():
+        with st.expander(f"{ticker} — {info.get('Recommendation', 'FAILED')}"):
+            if info['Status'] == "Success":
+                st.metric("Final Weighted Score", info['Score'], delta=info['Sentiment'])
+                st.write(f"**Recommendation**: :{info['Color']}[{info['Recommendation']}]")
+            else:
+                st.error(f"Analysis Failed: {info['Status']}")
+                if st.button(f"🔄 Retry {ticker}", key=f"retry_{ticker}"):
+                    analyze_ticker(ticker, date_range[0], date_range[1])
+                    st.rerun()
 
-    st.divider()
-    st.dataframe(df.drop(columns=['Color']), use_container_width=True)
+    # Log View
+    with st.expander("📝 Article Sentiment Log"):
+        st.dataframe(pd.DataFrame(st.session_state.analysis_logs), hide_index=True)
+else:
+    st.info("Enter tickers and click 'Run Full Analysis' to begin.")
 
