@@ -53,24 +53,19 @@ def get_av_analysis(symbol, api_key):
         return None
 
 if scan_btn:
+    # 1. Fetch macro data FIRST so variables exist
+    cur_rate, rate_delta = fetch_macro_data(FRED_KEY)
+    
+    # 2. Proceed with scanning loop
     tickers = [t.strip().upper() for t in watchlist_input.split(",")]
     results = []
     
-    # Use a status container to show live progress
-    with st.status("🔍 Analyzing Market Data...", expanded=True) as status:
-        for s in tickers:
-            if st.session_state.api_calls_used >= 25:
-                st.error(f"🛑 Daily Limit Reached (25/25). Cannot analyze {s}.")
-                break
-                
-            st.write(f"Fetching {s} news sentiment...")
-            res = get_av_analysis(s, AV_KEY, rate_delta, cur_rate)
-            
-            if res:
-                if res.get("Details") == "No news found":
-                    st.warning(f"⚠️ {s}: No recent news found on Alpha Vantage.")
-                else:
-                    results.append(res)
+    for s in tickers:
+        # Now rate_delta and cur_rate are defined!
+        res = get_av_analysis(s, AV_KEY, rate_delta, cur_rate)
+        if res:
+            results.append(res)
+
             else:
                 st.error(f"❌ {s}: API limit hit or connection failed.")
             
