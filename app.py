@@ -21,10 +21,7 @@ NEWS_API_KEY = st.secrets.get("news_api_key")
 
 # --- Logic Functions ---
 def get_news_sentiment(ticker, api_key, start_date, end_date):
-    """Fetches news with date filtering and safe param building."""
     base_url = "https://newsapi.org"
-    
-    # ISO 8601 formatting for NewsAPI
     params = {
         "q": ticker,
         "from": start_date.strftime('%Y-%m-%d'),
@@ -36,27 +33,16 @@ def get_news_sentiment(ticker, api_key, start_date, end_date):
     
     try:
         response = requests.get(base_url, params=params, timeout=10)
-        data = response.json()
         
-        if data.get("status") == "ok" and data.get("totalResults", 0) > 0:
-            articles = data["articles"][:10]
-            scores = []
-            for art in articles:
-                title = art.get('title', 'No Title')
-                text = f"{title} {art.get('description', '')}"
-                sentiment_score = TextBlob(text).sentiment.polarity
-                scores.append(sentiment_score)
-                
-                st.session_state.analysis_logs.append({
-                    "Ticker": ticker,
-                    "Title": title[:60],
-                    "Score": round(sentiment_score, 2)
-                })
-            return sum(scores) / len(scores) if scores else 0.0
-        return 0.0
-    except Exception as e:
-        st.sidebar.error(f"⚠️ {ticker} Error: {str(e)}")
-        return 0.0
+        # ADD THIS: Check if the response is successful (200 OK)
+        if response.status_code != 200:
+            st.sidebar.error(f"⚠️ {ticker} Error {response.status_code}: {response.reason}")
+            # If 403, it's likely a plan restriction; if 429, you're rate-limited.
+            return 0.0
+
+        data = response.json()
+        # ... (rest of your existing logic)
+
 
 def get_recommendation(score):
     if score > 0.10: return "BUY", "green", "Bullish sentiment relative to 2026 baseline."
