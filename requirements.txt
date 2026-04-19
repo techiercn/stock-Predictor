@@ -1,15 +1,5 @@
-streamlit
-yfinance
-pandas
-fredapi
-vaderSentiment
-requests
 pandas
 requests
 plotly
-pandas
-requests
-plotly
-textblob
 streamlit
 
