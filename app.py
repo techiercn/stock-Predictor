@@ -6,8 +6,8 @@ import time
 import plotly.express as px
 
 # --- Page Config ---
-st.set_page_config(page_title="2026 Macro Stock Pro", layout="wide")
-st.title("📈 AI Stock Pro: 2026 Alpha Vantage Edition")
+st.set_page_config(page_title="Mario 2026 Macro Stock Pro", layout="wide")
+st.title("📈 Mario AI Stock Pro: 2026 Alpha Vantage Edition")
 
 # --- Initialize Session State ---
 if 'results_data' not in st.session_state:
