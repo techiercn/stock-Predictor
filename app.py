@@ -12,55 +12,59 @@ st.title("📈 AI Stock Pro: 2026 Alpha Vantage Edition")
 # --- Initialize Session State ---
 if 'results_data' not in st.session_state:
     st.session_state.results_data = {}
-if 'quota_info' not in st.session_state:
-    st.session_state.quota_info = {"limit_daily": 25} # AV Free Tier Limit
 
-# --- API Keys ---
 AV_API_KEY = st.secrets.get("av_api_key")
 
-# --- Logic Functions ---
 def get_av_sentiment(ticker, api_key):
-    """Fetches specialized financial sentiment from Alpha Vantage."""
-    url = "https://alphavantage.co"
-    params = {
-        "function": "NEWS_SENTIMENT",
-        "tickers": ticker,
-        "apikey": api_key,
-        "limit": 5 # Limit articles to save processing
-    }
+    """Fetches sentiment with safety checks for empty/non-JSON responses."""
+    url = "https://www.alphavantage.co/query"
+    params = {"function": "NEWS_SENTIMENT", "tickers": ticker, "apikey": api_key, "limit": 5}
     
     try:
         response = requests.get(url, params=params, timeout=15)
-        data = response.json()
+        
+        # Check if response is empty (causes the char 0 error)
+        if not response.text or response.text.strip() == "":
+            return None, "Empty response from API (Likely rate limited)."
 
-        # Handle API Error messages (Rate limits/Invalid keys)
+        # Check status code
+        if response.status_code != 200:
+            return None, f"HTTP {response.status_code}: {response.reason}"
+
+        # Attempt JSON parsing safely
+        try:
+            data = response.json()
+        except Exception:
+            return None, "Server sent non-JSON data (Check your daily limit)."
+
+        # Handle API warning/info messages
         if "Information" in data or "Note" in data:
-            return None, data.get("Information") or data.get("Note")
+            return None, f"API Notice: {data.get('Information') or data.get('Note')}"
 
         feed = data.get("feed", [])
         if not feed:
-            return 0.0, "No recent financial news found."
+            return 0.0, "No recent news found."
 
-        # Extract ticker-specific sentiment score
-        ticker_scores = []
-        for article in feed:
-            for sentiment_data in article.get("ticker_sentiment", []):
-                if sentiment_data.get("ticker") == ticker:
-                    ticker_scores.append(float(sentiment_data.get("ticker_sentiment_score", 0)))
+        ticker_scores = [
+            float(s.get("ticker_sentiment_score", 0))
+            for art in feed
+            for s in art.get("ticker_sentiment", [])
+            if s.get("ticker") == ticker
+        ]
         
-        avg_score = sum(ticker_scores) / len(ticker_scores) if ticker_scores else 0.0
-        return avg_score, "Success"
+        return (sum(ticker_scores) / len(ticker_scores)), "Success" if ticker_scores else (0.0, "No ticker sentiment in feed.")
         
     except Exception as e:
-        return None, f"Connection Error: {str(e)}"
+        return None, f"System Error: {str(e)}"
 
 def analyze_ticker(ticker):
     """Processes ticker with 2026 Macro context."""
-    cur_rate = 3.64 # Fed Rate for April 2026
+    cur_rate = 3.64 # Fed Funds Rate as of mid-April 2026
     sentiment, status = get_av_sentiment(ticker, AV_API_KEY)
     
     if sentiment is not None:
-        final_score = sentiment + (0.05 if cur_rate < 4.0 else -0.05)
+        # Buffer: +0.05 because rates (3.64%) are below the 4.0% restrictive threshold
+        final_score = sentiment + 0.05
         if final_score > 0.15: rec, color = "BUY", "green"
         elif final_score < -0.15: rec, color = "SELL", "red"
         else: rec, color = "HOLD", "orange"
@@ -74,43 +78,38 @@ def analyze_ticker(ticker):
 
 # --- Sidebar ---
 with st.sidebar:
-    st.header("📊 Control Center")
-    st.info("Note: Alpha Vantage Free Tier allows 25 requests/day.")
-    watchlist_input = st.text_area("Enter Tickers", "AAPL, NVDA, TSLA, SCHD")
+    st.header("📊 Controls")
+    watchlist = st.text_area("Enter Tickers", "AAPL, NVDA, TSLA")
     
     if st.button("🔍 Run Full Analysis"):
+        tickers = [t.strip().upper() for t in watchlist.split(",")]
+        # Clear logs to avoid clutter
         st.session_state.results_data = {}
-        tickers = [t.strip().upper() for t in watchlist_input.split(",")]
-        for t in tickers:
-            analyze_ticker(t)
-            time.sleep(12) # 5 requests per minute limit
+        
+        with st.status("Fetching Market Intelligence...") as status:
+            for i, t in enumerate(tickers):
+                analyze_ticker(t)
+                st.write(f"✅ {t} Processed.")
+                # STRICT RATE LIMIT: 5 requests per minute = 12 sec delay
+                if i < len(tickers) - 1:
+                    time.sleep(12) 
+            status.update(label="Analysis Complete!", state="complete")
 
-# --- Main App Execution ---
-if not AV_API_KEY:
-    st.warning("⚠️ Alpha Vantage API Key missing! Add 'av_api_key' to Secrets.")
-    st.stop()
-
+# --- UI ---
 if st.session_state.results_data:
     df = pd.DataFrame.from_dict(st.session_state.results_data, orient='index').reset_index()
     df.rename(columns={'index': 'Ticker'}, inplace=True)
     
     valid_df = df[df['Status'] == "Success"]
     if not valid_df.empty:
-        st.subheader("📊 Sentiment vs 2026 Macro Baseline")
-        fig = px.bar(valid_df, x='Ticker', y='Score', color='Recommendation',
-                     color_discrete_map={'BUY': '#2ecc71', 'HOLD': '#f1c40f', 'SELL': '#e74c3c'})
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(px.bar(valid_df, x='Ticker', y='Score', color='Recommendation',
+                               color_discrete_map={'BUY': '#2ecc71', 'HOLD': '#f1c40f', 'SELL': '#e74c3c'}))
 
     for ticker, info in st.session_state.results_data.items():
-        with st.expander(f"{ticker} — {info.get('Recommendation', 'FAILED')}"):
+        with st.expander(f"{ticker} — {info.get('Status', 'ERROR')}"):
             if info['Status'] == "Success":
                 st.metric("Weighted Score", info['Score'], delta=info['Sentiment'])
-                st.write(f"**Signal**: :{info['Color']}[{info['Recommendation']}]")
+                st.write(f"Signal: :{info['Color']}[{info['Recommendation']}]")
             else:
-                st.error(f"Error: {info['Status']}")
-                if st.button(f"🔄 Retry {ticker}", key=f"retry_{ticker}"):
-                    analyze_ticker(ticker)
-                    st.rerun()
-else:
-    st.info("👈 Enter tickers in the sidebar and run analysis.")
+                st.error(f"Reason: {info['Status']}")
 
